@@ -1,0 +1,268 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MomoFly</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            background: #111;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            font-family: system-ui, -apple-system, sans-serif;
+            overflow: hidden;
+        }
+        #gameContainer {
+            position: relative;
+            border-radius: 12px;
+            overflow: hidden;
+            box-shadow: 0 0 40px rgba(0,0,0,0.5);
+        }
+        canvas {
+            display: block;
+        }
+        #score {
+            position: absolute;
+            top: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            color: #fff;
+            font-size: 48px;
+            font-weight: 800;
+            text-shadow: 0 2px 8px rgba(0,0,0,0.5);
+            user-select: none;
+            pointer-events: none;
+        }
+        #gameOver {
+            position: absolute;
+            inset: 0;
+            display: none;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            background: rgba(0,0,0,0.75);
+            backdrop-filter: blur(4px);
+            z-index: 10;
+        }
+        #gameOver img {
+            width: 80px;
+            height: 80px;
+            object-fit: contain;
+            margin-bottom: 12px;
+            animation: pop 0.4s ease-out;
+        }
+        @keyframes pop {
+            0% { transform: scale(0); opacity: 0; }
+            60% { transform: scale(1.2); }
+            100% { transform: scale(1); opacity: 1; }
+        }
+        #gameOver h1 {
+            color: #fff;
+            font-size: 36px;
+            font-weight: 800;
+            margin-bottom: 4px;
+        }
+        #gameOver p {
+            color: #aaa;
+            font-size: 18px;
+            margin-bottom: 24px;
+        }
+        #gameOver button {
+            padding: 10px 32px;
+            font-size: 16px;
+            font-weight: 600;
+            background: #fff;
+            color: #111;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: 0.15s;
+        }
+        #gameOver button:hover {
+            background: #ddd;
+            transform: scale(1.04);
+        }
+    </style>
+</head>
+<body>
+    <div id="gameContainer">
+        <canvas id="canvas" width="400" height="600"></canvas>
+        <div id="score">0</div>
+        <div id="gameOver">
+            <img id="momoImg" src="momo_bird.png" alt="Momo">
+            <h1>Game Over</h1>
+            <p id="finalScore">Score: 0</p>
+            <button onclick="restartGame()">Play Again</button>
+        </div>
+    </div>
+    <script>
+        const canvas = document.getElementById('canvas');
+        const ctx = canvas.getContext('2d');
+        const scoreEl = document.getElementById('score');
+        const gameOverEl = document.getElementById('gameOver');
+        const finalScoreEl = document.getElementById('finalScore');
+
+        const GRAVITY = 0.45;
+        const JUMP = -7.5;
+        const PIPE_WIDTH = 55;
+        const PIPE_GAP = 260;
+        const PIPE_SPEED = 2.5;
+
+        let bird, pipes, score, gameRunning;
+        let birdImg = new Image();
+        birdImg.src = 'momo_bird.png?v=' + Date.now();
+        birdImg.onload = function() {
+            if (bird) {
+                const aspect = birdImg.naturalWidth / birdImg.naturalHeight;
+                bird.h = 120;
+                bird.w = 120 * aspect;
+            }
+        };
+
+        let stars = Array.from({ length: 60 }, () => ({
+            x: Math.random() * 400,
+            y: Math.random() * 600,
+            r: Math.random() * 1.5 + 0.5,
+            a: Math.random() * Math.PI * 2
+        }));
+
+        let loseAudio = new Audio('faaaa.mp3?v=' + Date.now());
+        loseAudio.load();
+
+        function loseSound() {
+            try {
+                loseAudio.currentTime = 0;
+                loseAudio.play();
+            } catch(e) {}
+        }
+
+        function init() {
+            const aspect = (birdImg.complete && birdImg.naturalHeight > 0)
+                ? (birdImg.naturalWidth / birdImg.naturalHeight)
+                : 1.6;
+            bird = { x: 80, y: 250, vel: 0, w: 120 * aspect, h: 120, r: 0 };
+            pipes = [];
+            score = 0;
+            gameRunning = true;
+            scoreEl.textContent = '0';
+            gameOverEl.style.display = 'none';
+        }
+
+        function addPipe() {
+            const minY = 70, maxY = canvas.height - PIPE_GAP - 70;
+            const top = Math.floor(Math.random() * (maxY - minY + 1)) + minY;
+            pipes.push({ x: canvas.width, top, scored: false });
+        }
+
+        function update() {
+            if (!gameRunning) return;
+
+            bird.vel += GRAVITY;
+            bird.y += bird.vel;
+            bird.r = Math.min(Math.max(bird.vel * 3, -25), 80);
+
+            if (bird.y + bird.h > canvas.height || bird.y < 0) { gameOver(); return; }
+
+            if (!pipes.length || pipes[pipes.length - 1].x < canvas.width - 220) addPipe();
+
+            for (let i = pipes.length - 1; i >= 0; i--) {
+                pipes[i].x -= PIPE_SPEED;
+                if (!pipes[i].scored && pipes[i].x + PIPE_WIDTH < bird.x) {
+                    pipes[i].scored = true;
+                    score++;
+                    scoreEl.textContent = score;
+                }
+                if (pipes[i].x + PIPE_WIDTH < 0) { pipes.splice(i, 1); continue; }
+                if (checkCollision(pipes[i])) { gameOver(); return; }
+            }
+        }
+
+        function checkCollision(p) {
+            const px = bird.x + bird.w * 0.2, py = bird.y + bird.h * 0.15;
+            const pw = bird.w * 0.6, ph = bird.h * 0.7;
+            if (px + pw > p.x && px < p.x + PIPE_WIDTH) {
+                if (py < p.top || py + ph > p.top + PIPE_GAP) return true;
+            }
+            return false;
+        }
+
+        function draw() {
+            const grad = ctx.createLinearGradient(0, 0, 0, canvas.height);
+            grad.addColorStop(0, '#0b0e1a');
+            grad.addColorStop(0.5, '#141b33');
+            grad.addColorStop(1, '#1c1230');
+            ctx.fillStyle = grad;
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+            for (const s of stars) {
+                s.a += 0.02;
+                ctx.globalAlpha = 0.4 + Math.sin(s.a) * 0.3;
+                ctx.fillStyle = '#fff';
+                ctx.beginPath();
+                ctx.arc(s.x, s.y, s.r, 0, Math.PI * 2);
+                ctx.fill();
+            }
+            ctx.globalAlpha = 1;
+
+            for (const p of pipes) {
+                const g = ctx.createLinearGradient(p.x, 0, p.x + PIPE_WIDTH, 0);
+                g.addColorStop(0, '#1a3a5c');
+                g.addColorStop(0.5, '#2a5a8c');
+                g.addColorStop(1, '#1a3a5c');
+                ctx.fillStyle = g;
+                ctx.fillRect(p.x, 0, PIPE_WIDTH, p.top);
+                ctx.fillRect(p.x, p.top + PIPE_GAP, PIPE_WIDTH, canvas.height - p.top - PIPE_GAP);
+                ctx.fillStyle = '#3a7abd';
+                ctx.fillRect(p.x - 3, p.top - 16, PIPE_WIDTH + 6, 16);
+                ctx.fillRect(p.x - 3, p.top + PIPE_GAP, PIPE_WIDTH + 6, 16);
+            }
+
+            ctx.save();
+            ctx.translate(bird.x + bird.w / 2, bird.y + bird.h / 2);
+            ctx.rotate(bird.r * Math.PI / 180);
+            if (birdImg.complete && birdImg.naturalWidth > 0) {
+                ctx.drawImage(birdImg, -bird.w / 2, -bird.h / 2, bird.w, bird.h);
+            } else {
+                ctx.fillStyle = '#fff';
+                ctx.fillRect(-bird.w / 2, -bird.h / 2, bird.w, bird.h);
+            }
+            ctx.restore();
+        }
+
+        function gameOver() {
+            gameRunning = false;
+            loseSound();
+            finalScoreEl.textContent = 'Score: ' + score;
+            gameOverEl.style.display = 'flex';
+        }
+
+        function restartGame() { init(); }
+
+        function jump(e) {
+            if (e.type === 'keydown' && e.code !== 'Space' && e.code !== 'ArrowUp') return;
+            if (e.type === 'keydown') e.preventDefault();
+            if (!gameRunning) return;
+
+            // Unlock audio context/element on user gesture
+            if (loseAudio && loseAudio.paused && loseAudio.currentTime === 0) {
+                loseAudio.play().then(() => {
+                    loseAudio.pause();
+                }).catch(() => {});
+            }
+
+            bird.vel = JUMP;
+        }
+
+        document.addEventListener('keydown', jump);
+        document.addEventListener('click', jump);
+        canvas.addEventListener('touchstart', e => { e.preventDefault(); jump(e); });
+
+        init();
+        function loop() { update(); draw(); requestAnimationFrame(loop); }
+        loop();
+    </script>
+</body>
+</html>
